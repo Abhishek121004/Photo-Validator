@@ -31,25 +31,36 @@ The system supports **JPEG**, **PNG**, and **HEIC** images and provides a confid
 - NumPy
 
 ---
-
 ## 📂 Project Structure
 
 ```text
-photo-validator/
+PHOTO VALIDATOR/
 │
-├── app/
-│   ├── main.py
-│   ├── validators/
-│   ├── services/
-│   ├── utils/
-│   └── models/
+├── app/                        # FastAPI application
 │
-├── static/
-├── templates/
-├── sample_images/
-├── requirements.txt
-├── Dockerfile
+├── data/                       # Dataset
+│   ├── acceptable/
+│   ├── manual_verification/
+│   ├── rejected/
+│   ├── train/
+│   ├── val/
+│   └── labels.csv
+│
+├── photo_validator/            # Core validation package
+│
+├── tests/                      # Test cases
+│
+├── calibrate.py                # Confidence threshold calibration
+├── debug_signals.py            # Debug and feature analysis
+├── init_dataset.py             # Dataset initialization
+├── split_dataset.py            # Train-validation dataset split
+├── train.py                    # Model training
+├── validate.py                 # Image validation script
+│
+├── photo_validator.joblib      # Trained model
+├── requirements.txt            # Project dependencies
 └── README.md
+```
 ```
 
 ---
