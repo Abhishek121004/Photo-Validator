@@ -1,0 +1,7 @@
+numpy
+Pillow
+scikit-learn
+joblib
+pillow-heif
+opencv-python
+mediapipe
