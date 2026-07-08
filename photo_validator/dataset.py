@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 from typing import Iterable
 
+from .ai_detector import AiLabel
 from .model import Label
 
 
@@ -25,12 +26,28 @@ LABEL_FOLDERS: dict[str, Label] = {
     "rejected": "rejected",
 }
 
+AI_LABEL_ALIASES: dict[str, AiLabel] = {
+    "ai_generated": "ai_generated",
+    "ai": "ai_generated",
+    "generated": "ai_generated",
+    "real": "real",
+    "photo": "real",
+    "genuine": "real",
+}
+
 
 def normalize_label(value: str) -> Label:
     key = value.strip().lower().replace("-", "_")
     if key not in LABEL_ALIASES:
         raise ValueError(f"Unknown label: {value!r}")
     return LABEL_ALIASES[key]
+
+
+def normalize_ai_label(value: str) -> AiLabel:
+    key = value.strip().lower().replace("-", "_")
+    if key not in AI_LABEL_ALIASES:
+        raise ValueError(f"Unknown AI label: {value!r}")
+    return AI_LABEL_ALIASES[key]
 
 
 def load_labeled_csv(path: str | Path) -> list[tuple[str, Label]]:
@@ -95,6 +112,35 @@ def load_train_val_folder_dataset(root: str | Path) -> tuple[list[tuple[str, Lab
 
     samples = load_folder_dataset(root_path)
     return samples, []
+
+
+def load_ai_labeled_csv(path: str | Path) -> list[tuple[str, AiLabel]]:
+    rows: list[tuple[str, AiLabel]] = []
+    with open(path, "r", newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        if "path" not in reader.fieldnames or "label" not in reader.fieldnames:
+            raise ValueError("CSV must contain 'path' and 'label' columns.")
+        for row in reader:
+            rows.append((row["path"], normalize_ai_label(row["label"])))
+    return rows
+
+
+def load_ai_folder_dataset(root: str | Path) -> list[tuple[str, AiLabel]]:
+    root_path = Path(root)
+    samples: list[tuple[str, AiLabel]] = []
+    for folder_name, label in {"ai_generated": "ai_generated", "real": "real"}.items():
+        folder = root_path / folder_name
+        if not folder.exists():
+            continue
+        for path in folder.rglob("*"):
+            if path.is_file():
+                samples.append((str(path), label))
+    if not samples:
+        raise ValueError(
+            "No AI labeled images found. Use either a CSV with path,label columns or "
+            "a folder tree containing ai_generated/ and real/."
+        )
+    return samples
 
 
 def iter_image_paths(root: str | Path) -> Iterable[str]:

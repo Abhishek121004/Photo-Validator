@@ -54,6 +54,12 @@ BASE_FEATURE_NAMES = [
     "person_area_max",
     "person_area_sum",
     "person_center_offset",
+    "ai_generated_score",
+    "ai_noise_std",
+    "ai_frequency_ratio",
+    "ai_patch_std",
+    "ai_flat_patch_ratio",
+    "ai_patch_var_std",
 ]
 
 FEATURE_NAMES = (
@@ -111,6 +117,12 @@ class VisionSignals:
     person_area_max: float
     person_area_sum: float
     person_center_offset: float
+    ai_generated_score: float
+    ai_noise_std: float
+    ai_frequency_ratio: float
+    ai_patch_std: float
+    ai_flat_patch_ratio: float
+    ai_patch_var_std: float
     gray_thumbnail: np.ndarray
     sat_thumbnail: np.ndarray
 
@@ -153,7 +165,12 @@ def _edge_density(gray: np.ndarray) -> float:
 
 
 def _entropy(gray: np.ndarray) -> float:
-    hist, _ = np.histogram(gray, bins=32, range=(0.0, 1.0), density=True)
+    hist, _ = np.histogram(gray, bins=32, range=(0.0, 1.0), density=False)
+    hist = hist.astype(np.float32)
+    total = float(hist.sum())
+    if total <= 0:
+        return 0.0
+    hist /= total
     hist = hist[hist > 0]
     if hist.size == 0:
         return 0.0
@@ -198,6 +215,85 @@ def _thumbnail(image: Image.Image, mode: str) -> np.ndarray:
 def _analysis_image(image: Image.Image) -> Image.Image:
     rgb = image.convert("RGB")
     return ImageOps.contain(rgb, (MAX_ANALYSIS_SIDE, MAX_ANALYSIS_SIDE), method=Image.Resampling.BILINEAR)
+
+
+def _clamp01(value: float) -> float:
+    return float(np.clip(value, 0.0, 1.0))
+
+
+def _average_filter(gray: np.ndarray, size: int = 5) -> np.ndarray:
+    pad = size // 2
+    padded = np.pad(gray, pad, mode="reflect")
+    out = np.zeros_like(gray)
+    for dy in range(size):
+        for dx in range(size):
+            out += padded[dy : dy + gray.shape[0], dx : dx + gray.shape[1]]
+    return out / float(size * size)
+
+
+def _ai_generation_metrics(gray: np.ndarray) -> tuple[float, float, float, float, float, float]:
+    if gray.size == 0:
+        return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+
+    if _cv2 is not None:
+        gray_u8 = np.clip(gray * 255.0, 0.0, 255.0).astype(np.uint8)
+        blurred = _cv2.GaussianBlur(gray_u8, (5, 5), 0).astype(np.float32) / 255.0
+    else:
+        blurred = _average_filter(gray)
+
+    residual = gray - blurred
+    noise_std = float(residual.std())
+
+    small = gray
+    if min(gray.shape) > 128:
+        step = max(1, min(gray.shape) // 128)
+        small = gray[::step, ::step]
+    if small.shape[0] >= 8 and small.shape[1] >= 8:
+        centered = small - float(small.mean())
+        spectrum = np.abs(np.fft.fftshift(np.fft.fft2(centered)))
+        yy, xx = np.ogrid[:spectrum.shape[0], :spectrum.shape[1]]
+        cy = (spectrum.shape[0] - 1) / 2.0
+        cx = (spectrum.shape[1] - 1) / 2.0
+        radius = np.hypot(yy - cy, xx - cx)
+        max_radius = float(radius.max()) or 1.0
+        high_frequency_ratio = float(spectrum[radius >= max_radius * 0.45].sum() / max(float(spectrum.sum()), 1e-6))
+    else:
+        high_frequency_ratio = 0.0
+
+    patch_h = max(8, gray.shape[0] // 8)
+    patch_w = max(8, gray.shape[1] // 8)
+    patch_means: list[float] = []
+    patch_vars: list[float] = []
+    flat_patch_count = 0
+    patch_count = 0
+    for y in range(0, gray.shape[0], patch_h):
+        for x in range(0, gray.shape[1], patch_w):
+            patch = gray[y : min(gray.shape[0], y + patch_h), x : min(gray.shape[1], x + patch_w)]
+            if patch.size:
+                patch_count += 1
+                patch_mean = float(patch.mean())
+                patch_var = float(patch.var())
+                patch_means.append(patch_mean)
+                patch_vars.append(patch_var)
+                if patch_var < 0.0025:
+                    flat_patch_count += 1
+    patch_std = float(np.std(patch_means)) if patch_means else 0.0
+    patch_var_std = float(np.std(patch_vars)) if patch_vars else 0.0
+    flat_patch_ratio = float(flat_patch_count / max(1, patch_count))
+
+    smoothness_score = _clamp01((0.030 - noise_std) / 0.030)
+    frequency_score = _clamp01((0.34 - high_frequency_ratio) / 0.34)
+    patch_score = _clamp01((0.14 - patch_std) / 0.14)
+    flat_patch_score = _clamp01((flat_patch_ratio - 0.22) / 0.45)
+    patch_var_score = _clamp01((0.015 - patch_var_std) / 0.015)
+    ai_score = float(
+        0.30 * smoothness_score
+        + 0.20 * frequency_score
+        + 0.20 * patch_score
+        + 0.20 * flat_patch_score
+        + 0.10 * patch_var_score
+    )
+    return ai_score, noise_std, high_frequency_ratio, patch_std, flat_patch_ratio, patch_var_std
 
 
 @lru_cache(maxsize=1)
@@ -321,6 +417,7 @@ def extract_signals(image: Image.Image) -> VisionSignals:
     lower_body_visible = 1.0 if ankles_visible or knees_visible else 0.0
     upper_body_visible = 1.0 if face_count or shoulders_visible else 0.0
     face_to_pose_height_ratio = float(face_area_max / pose_bbox_height) if pose_bbox_height > 0 else 0.0
+    ai_generated_score, ai_noise_std, ai_frequency_ratio, ai_patch_std, ai_flat_patch_ratio, ai_patch_var_std = _ai_generation_metrics(gray)
 
     gray_thumb_image = _thumbnail(processed, "L")
     color_thumb = _thumbnail(processed, "RGB")
@@ -366,6 +463,12 @@ def extract_signals(image: Image.Image) -> VisionSignals:
         person_area_max=person_area_max,
         person_area_sum=person_area_sum,
         person_center_offset=person_center_offset,
+        ai_generated_score=ai_generated_score,
+        ai_noise_std=ai_noise_std,
+        ai_frequency_ratio=ai_frequency_ratio,
+        ai_patch_std=ai_patch_std,
+        ai_flat_patch_ratio=ai_flat_patch_ratio,
+        ai_patch_var_std=ai_patch_var_std,
         gray_thumbnail=gray_thumb.astype(np.float32),
         sat_thumbnail=sat_thumb.astype(np.float32),
     )
@@ -412,6 +515,12 @@ def extract_features(image: Image.Image) -> FeatureVector:
             signals.person_area_max,
             signals.person_area_sum,
             signals.person_center_offset,
+            signals.ai_generated_score,
+            signals.ai_noise_std,
+            signals.ai_frequency_ratio,
+            signals.ai_patch_std,
+            signals.ai_flat_patch_ratio,
+            signals.ai_patch_var_std,
             *signals.gray_thumbnail.tolist(),
             *signals.sat_thumbnail.tolist(),
         ],

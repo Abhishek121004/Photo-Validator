@@ -31,3 +31,6 @@ def test_predict_api(tmp_path: Path) -> None:
     payload = response.json()
     assert payload["filename"] == "upload.png"
     assert payload["label"] in {"acceptable", "manual_verification", "rejected"}
+    assert "ai_generated" in payload
+    assert "ai_generated_score" in payload
+    assert "ai_generated_backend" in payload

@@ -17,6 +17,7 @@ class Thresholds:
     max_face_count_for_manual: float = 2.0
     min_pose_visible_landmarks_for_body_reject: float = 12.0
     body_reject_pose_bbox_height: float = 0.78
+    ai_generated_flag: float = 0.45
 
     @classmethod
     def from_dict(cls, data: dict) -> "Thresholds":
@@ -37,6 +38,7 @@ class Thresholds:
             body_reject_pose_bbox_height=float(
                 data.get("body_reject_pose_bbox_height", cls.body_reject_pose_bbox_height)
             ),
+            ai_generated_flag=float(data.get("ai_generated_flag", cls.ai_generated_flag)),
         )
 
     def to_dict(self) -> dict[str, float | int]:

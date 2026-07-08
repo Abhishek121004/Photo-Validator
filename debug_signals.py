@@ -59,6 +59,14 @@ def main() -> None:
             "area_sum": signals.person_area_sum,
             "center_offset": signals.person_center_offset,
         },
+        "ai_generated": {
+            "score": signals.ai_generated_score,
+            "noise_std": signals.ai_noise_std,
+            "frequency_ratio": signals.ai_frequency_ratio,
+            "patch_std": signals.ai_patch_std,
+            "flat_patch_ratio": signals.ai_flat_patch_ratio,
+            "patch_var_std": signals.ai_patch_var_std,
+        },
     }
     print(json.dumps(payload, indent=2))
 

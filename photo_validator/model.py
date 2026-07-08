@@ -8,6 +8,7 @@ from typing import Iterable, Literal
 from PIL import Image
 
 from .calibration import Thresholds
+from .ai_detector import AiDetectionResult, AiGeneratedDetector
 from .features import VisionSignals, extract_signals
 from .image_io import load_image
 
@@ -19,11 +20,21 @@ class ValidationResult:
     label: Label
     confidence: float
     probabilities: dict[str, float]
+    ai_generated: bool = False
+    ai_generated_score: float = 0.0
+    ai_generated_reason: str = ""
+    ai_generated_backend: str = ""
 
 
 class PhotoValidator:
-    def __init__(self, thresholds: Thresholds | None = None):
+    def __init__(
+        self,
+        thresholds: Thresholds | None = None,
+        ai_detector: AiGeneratedDetector | None = None,
+    ):
         self.thresholds = thresholds or Thresholds()
+        self.ai_detector = ai_detector or AiGeneratedDetector()
+        self.ai_detector.threshold = self.thresholds.ai_generated_flag
 
     @classmethod
     def train(cls, images: Iterable[tuple[str | Path, Label]] | None = None) -> "PhotoValidator":
@@ -44,31 +55,50 @@ class PhotoValidator:
                 pass
         return model
 
-    def _rule_based_decision(self, signals: VisionSignals) -> ValidationResult:
+    def _rule_based_decision(
+        self,
+        signals: VisionSignals,
+        ai_result: AiDetectionResult,
+    ) -> ValidationResult:
         thresholds = self.thresholds
 
-        if min(signals.width, signals.height) < thresholds.min_resolution_side:
+        def make_result(
+            label: Label,
+            confidence: float,
+            probabilities: dict[str, float],
+        ) -> ValidationResult:
             return ValidationResult(
+                label=label,
+                confidence=confidence,
+                probabilities=probabilities,
+                ai_generated=ai_result.is_ai_generated,
+                ai_generated_score=ai_result.score,
+                ai_generated_reason=ai_result.reason,
+                ai_generated_backend=ai_result.backend,
+            )
+
+        if min(signals.width, signals.height) < thresholds.min_resolution_side:
+            return make_result(
                 label="manual_verification",
                 confidence=0.35,
                 probabilities={"acceptable": 0.0, "manual_verification": 1.0, "rejected": 0.0},
             )
 
         if signals.blur_variance < thresholds.blur_reject:
-            return ValidationResult(
+            return make_result(
                 label="rejected",
                 confidence=0.95,
                 probabilities={"acceptable": 0.0, "manual_verification": 0.05, "rejected": 0.95},
             )
         if signals.blur_variance < thresholds.blur_manual:
-            return ValidationResult(
+            return make_result(
                 label="manual_verification",
                 confidence=0.70,
                 probabilities={"acceptable": 0.0, "manual_verification": 1.0, "rejected": 0.0},
             )
 
         if signals.person_count >= 2:
-            return ValidationResult(
+            return make_result(
                 label="manual_verification",
                 confidence=0.85,
                 probabilities={"acceptable": 0.0, "manual_verification": 1.0, "rejected": 0.0},
@@ -76,18 +106,18 @@ class PhotoValidator:
 
         if signals.person_count >= 1:
             if signals.person_area_max > 0.28 or signals.lower_body_visible >= 1.0:
-                return ValidationResult(
+                return make_result(
                     label="rejected",
                     confidence=0.92,
                     probabilities={"acceptable": 0.0, "manual_verification": 0.08, "rejected": 0.92},
                 )
             if signals.face_count >= 1 and signals.center_skin_ratio >= 0.06:
-                return ValidationResult(
+                return make_result(
                     label="acceptable",
                     confidence=0.88,
                     probabilities={"acceptable": 0.88, "manual_verification": 0.10, "rejected": 0.02},
                 )
-            return ValidationResult(
+            return make_result(
                 label="manual_verification",
                 confidence=0.72,
                 probabilities={"acceptable": 0.0, "manual_verification": 1.0, "rejected": 0.0},
@@ -95,25 +125,25 @@ class PhotoValidator:
 
         if signals.face_count >= 1 and signals.skin_ratio >= 0.02:
             if signals.center_skin_ratio >= 0.05 and signals.person_area_sum <= 0.20:
-                return ValidationResult(
+                return make_result(
                     label="acceptable",
                     confidence=0.84,
                     probabilities={"acceptable": 0.84, "manual_verification": 0.12, "rejected": 0.04},
                 )
-            return ValidationResult(
+            return make_result(
                 label="manual_verification",
                 confidence=0.68,
                 probabilities={"acceptable": 0.0, "manual_verification": 1.0, "rejected": 0.0},
             )
 
         if signals.skin_ratio < 0.01:
-            return ValidationResult(
+            return make_result(
                 label="rejected",
                 confidence=0.90,
                 probabilities={"acceptable": 0.02, "manual_verification": 0.08, "rejected": 0.90},
             )
 
-        return ValidationResult(
+        return make_result(
             label="manual_verification",
             confidence=0.60,
             probabilities={"acceptable": 0.0, "manual_verification": 1.0, "rejected": 0.0},
@@ -121,7 +151,8 @@ class PhotoValidator:
 
     def predict_image(self, image: Image.Image) -> ValidationResult:
         signals = extract_signals(image)
-        return self._rule_based_decision(signals)
+        ai_result = self.ai_detector.predict_signals(signals, image=image)
+        return self._rule_based_decision(signals, ai_result)
 
     def predict_path(self, path: str | Path) -> ValidationResult:
         return self.predict_image(load_image(path))
@@ -144,4 +175,4 @@ class PhotoValidator:
             return cls()
 
     def with_thresholds(self, thresholds: Thresholds) -> "PhotoValidator":
-        return PhotoValidator(thresholds=thresholds)
+        return PhotoValidator(thresholds=thresholds, ai_detector=self.ai_detector)

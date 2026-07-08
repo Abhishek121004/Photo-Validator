@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from PIL import Image
 
+from photo_validator.ai_detector import AiGeneratedDetector
 from photo_validator.image_io import UnsupportedImageFormat
 from photo_validator.model import PhotoValidator
 
@@ -16,6 +17,7 @@ from photo_validator.model import PhotoValidator
 app = FastAPI(title="Photo Validator")
 
 THRESHOLDS_PATH = Path("thresholds.json")
+AI_DETECTOR_PATH = Path("ai_generated_detector.joblib")
 
 
 class PhotoUpload(BaseModel):
@@ -25,7 +27,8 @@ class PhotoUpload(BaseModel):
 
 
 def _load_model(thresholds_path: Path | None = None) -> PhotoValidator:
-    model = PhotoValidator()
+    ai_detector = AiGeneratedDetector.load(AI_DETECTOR_PATH)
+    model = PhotoValidator(ai_detector=ai_detector)
     active_thresholds = thresholds_path or THRESHOLDS_PATH
     if active_thresholds.exists():
         from photo_validator.calibration import load_thresholds
@@ -120,4 +123,8 @@ def predict(payload: PhotoUpload) -> dict:
         "label": result.label,
         "confidence": result.confidence,
         "probabilities": result.probabilities,
+        "ai_generated": result.ai_generated,
+        "ai_generated_score": result.ai_generated_score,
+        "ai_generated_reason": result.ai_generated_reason,
+        "ai_generated_backend": result.ai_generated_backend,
     }
