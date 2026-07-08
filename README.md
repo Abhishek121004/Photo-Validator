@@ -130,12 +130,12 @@ ai_data/
   ai_generated/
   real/
   ai_labels.csv
+```
 
 If you already have labeled paths in a CSV, copy them into the training folders with:
 
 ```bash
 python prepare_ai_dataset.py --labels ai_data/ai_labels.csv --source-root path/to/images --output ai_data
-```
 ```
 
 ## Split Dataset
